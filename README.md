@@ -38,11 +38,12 @@
 ## 使用方法
 
 ### 下载
-[Releases](https://github.com/tori-RR/DoubaoIME_Darkmode/releases)  `DoubaoIME_TT.exe`
+[Releases](https://github.com/tori-RR/DoubaoIME_ThemeTool/releases)  
+`DoubaoIME_TT.exe`
 
 ### 安装
 
-启动后选择主题、字体、透明度或头像
+选择主题、字体、透明度或头像
 点击安装生效
 
 ### 恢复
@@ -60,7 +61,7 @@
 
 ## 原理
 
-插件会读取本机输入法 `skin/default` 中的原始 SVG / XML / PNG 资源，根据用户选择的颜色、字体、透明度和头像生成新的皮肤文件，然后写回对应目录
+插件会读取输入法 `skin/default` 中的原始 SVG / XML / PNG 资源，生成新的皮肤文件，然后写回对应目录
 
 ### 文件位置
 
@@ -72,20 +73,20 @@ C:\tmp\DoubaoIME_TT\
 
 其中 `logo.png` 和 `taskbar-icons\` 只在使用自定义图标时产生
 
-豆包输入法原始皮肤文件的备份保存在对应版本的：
+输入法原始皮肤文件的备份保存在对应版本的：
 
 ```text
-skin\default\dmdm_backup\
+~\<version>\skin\default\dmdm_backup\
 ```
 
-卸载主题时会使用这里的文件恢复官方皮肤，请谨慎删除
+恢复主题时会使用这里的文件，请谨慎删除
 
 ### 兼容性
 
 当前测试兼容 `v0.9.2.7`
 
-> 官方更新可能改变皮肤结构，程序启动时会检查输入法的目录结构；
-> 如果检测到当前输入法结构与已验证版本不一致，会提示可能不兼容，并阻止直接安装主题；
+> 更新可能改变皮肤结构，启动时会检查输入法的目录结构；
+> 检测到当前结构与已验证版本不一致时，会提示不兼容；
 > 版本未验证但结构一致时，可尝试安装；
 
 
