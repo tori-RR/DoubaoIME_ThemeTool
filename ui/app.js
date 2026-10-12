@@ -6,8 +6,8 @@ const imeStateText = $("ime-state-text");
 const imeVersionTip = $("ime-version-tip");
 const imeVersionTipText = $("ime-version-tip-text");
 const workdirTipText = $("workdir-tip-text");
-const WORKDIR = String.raw`C:\tmp\DoubaoIME Darkmode`;
-const PUBLIC_REPO_URL = "https://github.com/tori-RR/DoubaoIME_Darkmode";
+const WORKDIR = String.raw`C:\tmp\DoubaoIME_TT`;
+const PUBLIC_REPO_URL = "https://github.com/tori-RR/DoubaoIME_ThemeTool";
 const errorEl = $("error");
 const customPanel = $("custom-panel");
 const glassPanel = $("glass-panel");
@@ -415,7 +415,7 @@ function render(status, { keepPlugin, keepColors } = {}) {
   const ready = status.ime_installed;
   $("btn-install").disabled = !!status.review_mode || !ready || (!status.ime_compatible && !status.recovery_needed);
   $("btn-install").textContent = status.recovery_needed ? "恢复" : "安装";
-  const needsRestore = status.skin_applied || status.recovery_needed;
+  const needsRestore = status.skin_applied || status.recovery_needed || !!status.theme_mode_pending;
   $("btn-uninstall").disabled = !!status.review_mode || (needsRestore && !status.can_restore);
   $("btn-clear-logo").disabled = false;
   $("btn-clear-taskbar-logo").disabled = false;
@@ -980,6 +980,10 @@ function hideToolbar() {
 
 function showToolbar(preview, hasCustom) {
   $("preview-toolbar").hidden = false;
+  // The modern skin draws a 22px avatar centered in its unchanged 26px button.
+  const logoSize = preview.logo_size === 22 ? 22 : 26;
+  $("preview-toolbar").style.setProperty("--toolbar-logo-size", `${logoSize}px`);
+  $("toolbar-logo").dataset.previewSize = String(logoSize);
   $("toolbar-bg").src = svgUrl(preview.bg);
   $("toolbar-divider").src = svgUrl(preview.divider);
   $("toolbar-mic").src = svgUrl(preview.mic);
@@ -1059,7 +1063,7 @@ $("btn-install").addEventListener("click", () => {
   call("install", { colors: readPickers() });
 });
 $("btn-uninstall").addEventListener("click", () => {
-  const missing = !lastStatus || (!lastStatus.skin_applied && !lastStatus.recovery_needed);
+  const missing = !lastStatus || (!lastStatus.skin_applied && !lastStatus.recovery_needed && !lastStatus.theme_mode_pending);
   if (window.Kaomoji) window.Kaomoji.show(missing ? "bad" : "cancel");
   if (missing) return;
   call("uninstall");

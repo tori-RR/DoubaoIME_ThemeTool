@@ -70,6 +70,24 @@ test("picker buttons stay square without shrinking and previews preserve their a
   assert.equal(declarations(".icon-picker img:not([hidden]) + .icon-placeholder").display, "none");
 });
 
+test("toolbar preserves official slots while centering smaller modern artwork", () => {
+  const slot = declarations(".toolbar-logo-slot");
+  assert.equal(slot.display, "grid");
+  assert.equal(slot["place-items"], "center");
+  assert.equal(slot.width, "26px");
+  assert.equal(slot.height, "26px");
+  assert.equal(slot.flex, "0 0 26px");
+  assert.match(markup, /class="toolbar-logo-slot"><img id="toolbar-logo"/);
+  assert.equal(declarations(".toolbar-logo").width, "var(--toolbar-logo-size, 26px)");
+  assert.equal(declarations(".toolbar-logo").height, "var(--toolbar-logo-size, 26px)");
+  assert.equal(declarations(".toolbar-logo")["object-fit"], "contain");
+  assert.equal(declarations(".toolbar-row")["align-items"], "center");
+  assert.equal(declarations(".toolbar-icon").width, "24px");
+  assert.equal(declarations(".toolbar-icon").height, "24px");
+  assert.equal(declarations("#toolbar-mic").transform, undefined);
+  assert.equal(declarations(".toolbar-mic").transform, undefined);
+});
+
 test("the compact row fits without reserving layout space for restore overlays", () => {
   const appPadding = declarations(".app").padding.split(/\s+/).map(Number.parseFloat);
   const available = config.app.windows[0].width - pixels("body::-webkit-scrollbar", "width") - 2 * appPadding[1];

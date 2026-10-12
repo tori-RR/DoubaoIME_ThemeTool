@@ -17,6 +17,39 @@ pub const BACKUP_DIR_NAME: &str = crate::transaction::BACKUP;
 pub fn official_hashes() -> Hashes {
     serde_json::from_str(include_str!("official-hashes.json")).expect("checked adapter manifest")
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layout {
+    Legacy,
+    SplitDark,
+}
+impl Layout {
+    pub fn paths(self) -> std::collections::BTreeSet<String> {
+        match self {
+            Self::Legacy => official_hashes().into_keys().collect(),
+            Self::SplitDark => crate::theme_modern::paths(),
+        }
+    }
+    pub fn status_dir(self) -> &'static str {
+        match self {
+            Self::Legacy => "status_wnd",
+            Self::SplitDark => "dark/status_wnd",
+        }
+    }
+}
+pub fn layout(dir: &Path) -> Layout {
+    // A partial split layout must fail its own checks, never fall back to legacy.
+    if dir.join("dark").exists() || dir.join("color").exists() {
+        Layout::SplitDark
+    } else {
+        Layout::Legacy
+    }
+}
+pub fn layout_for_hashes(hashes: &Hashes) -> Result<Layout, String> {
+    [Layout::Legacy, Layout::SplitDark]
+        .into_iter()
+        .find(|layout| hashes.keys().eq(layout.paths().iter()))
+        .ok_or_else(|| "补丁文件清单不完整".into())
+}
 fn skin_for(version: &str) -> PathBuf {
     PathBuf::from(IME_ROOT)
         .join("versions")
@@ -31,15 +64,16 @@ pub fn inspect_structure(dir: &Path) -> Result<(), String> {
 }
 
 fn read_managed_files(dir: &Path) -> Result<Files, String> {
-    official_hashes()
-        .keys()
+    layout(dir)
+        .paths()
+        .into_iter()
         .map(|rel| {
-            let bytes = safe_fs::read(&dir.join(rel), 4 * 1024 * 1024)
+            let bytes = safe_fs::read(&dir.join(&rel), 4 * 1024 * 1024)
                 .map_err(|err| format!("必需文件 {rel} 缺失或无法读取：{err}"))?;
             if bytes.is_empty() {
                 return Err(format!("必需文件 {rel} 为空"));
             }
-            Ok((rel.clone(), bytes))
+            Ok((rel, bytes))
         })
         .collect()
 }
@@ -68,11 +102,14 @@ fn bootstrap_version(raw: &[u8]) -> Result<String, String> {
 /// runs reconstruct that baseline only from the retained backup.
 pub fn store_for(target: &DetectedIme) -> Result<Store, String> {
     inspect_structure(&target.skin)?;
-    let baseline = if target.version == IME_VERSION {
+    let baseline = if target.version == IME_VERSION && layout(&target.skin) == Layout::Legacy {
         official_hashes()
     } else {
         let backup = target.skin.join(BACKUP_DIR_NAME);
         let originals = if backup.is_dir() {
+            if layout(&backup) != layout(&target.skin) {
+                return Err("备份与当前皮肤结构不一致，已停止操作".into());
+            }
             read_managed_files(&backup)?
         } else {
             read_managed_files(&target.skin)?
@@ -204,7 +241,9 @@ pub fn copy_original(originals: &Path, rel: &str, dest: &Path) -> Result<(), Str
     fs::write(dest, read_original_bytes(originals, rel)?).map_err(|e| e.to_string())
 }
 pub fn official_status_wnd() -> Option<PathBuf> {
-    originals_dir().ok().map(|p| p.join("status_wnd"))
+    originals_dir()
+        .ok()
+        .map(|p| p.join(layout(&p).status_dir()))
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -263,11 +302,11 @@ impl Job {
         {
             return Err("恢复操作不能写入自定义任务栏图标".into());
         }
-        if self.expected.keys().ne(official_hashes().keys())
-            || self
-                .expected
-                .values()
-                .any(|h| h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()))
+        layout_for_hashes(&self.expected)?;
+        if self
+            .expected
+            .values()
+            .any(|h| h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()))
         {
             return Err("补丁文件清单不完整".into());
         }
@@ -286,7 +325,7 @@ impl Job {
     }
 }
 
-fn valid_ime_version(version: &str) -> bool {
+pub(crate) fn valid_ime_version(version: &str) -> bool {
     let Some(rest) = version.strip_prefix('v') else {
         return false;
     };
@@ -393,6 +432,17 @@ mod structure_tests {
         };
         assert!(job("v0.10.0.0").validate().is_ok());
         assert!(job("v1.0.0-beta1").validate().is_ok());
+        let mut modern = job("v0.9.2.7");
+        modern.expected = Layout::SplitDark
+            .paths()
+            .into_iter()
+            .map(|p| (p, "a".repeat(64)))
+            .collect();
+        assert!(modern.validate().is_ok());
+        modern
+            .expected
+            .insert("light/escape.svg".into(), "a".repeat(64));
+        assert!(modern.validate().is_err());
         for version in ["0.10.0.0", "v", "v../escape", "v0\\escape", "v0:escape"] {
             assert!(job(version).validate().is_err());
         }
@@ -415,6 +465,13 @@ mod structure_tests {
         assert!(inspect_structure(&fixture.skin())
             .unwrap_err()
             .contains("window.xml"));
+    }
+    #[test]
+    fn partial_split_layout_never_falls_back_to_legacy() {
+        let fixture = Fixture::new();
+        fs::create_dir(fixture.skin().join("dark")).unwrap();
+        assert_eq!(layout(&fixture.skin()), Layout::SplitDark);
+        assert!(inspect_structure(&fixture.skin()).is_err());
     }
 
     #[test]
@@ -441,6 +498,27 @@ mod structure_tests {
 #[cfg(test)]
 mod live_tests {
     use super::*;
+    #[test]
+    #[ignore = "read-only current version/process/official-mode probe; never updates settings"]
+    fn split_runtime_read_only() {
+        let target = detect().unwrap();
+        assert_eq!(target.version, "v0.9.2.7");
+        assert_eq!(layout(&target.skin), Layout::SplitDark);
+        let status = crate::current_status();
+        assert!(
+            status.ime_structure_matches && status.ime_compatible,
+            "{}",
+            status.warning
+        );
+        assert!(!VERIFIED_IME_VERSIONS.contains(&target.version.as_str()));
+        println!(
+            "Detected {}; structure={} compatible={}; official mode={:?} (read-only)",
+            target.version,
+            status.ime_structure_matches,
+            status.ime_compatible,
+            crate::ime_rpc::theme_mode().unwrap()
+        );
+    }
     #[test]
     #[ignore = "read-only integration check requires this machine's verified IME installation"]
     fn installed_adapter_read_only() {
@@ -513,6 +591,9 @@ fn target_for_job(job: &Job) -> Result<DetectedIme, String> {
 }
 
 fn preflight_target(job: &Job, target: &DetectedIme) -> Result<(), String> {
+    if layout_for_hashes(&job.expected)? != layout(&target.skin) {
+        return Err("预检后皮肤结构发生变化".into());
+    }
     let store = store_for(target)?;
     if matches!(job.action, Action::Recover) {
         if !store.recovery_needed()? && !crate::taskbar_icon::recovery_needed()? {
@@ -564,7 +645,7 @@ pub struct JobResult {
 pub fn run_job(job: &Job) -> Result<(), String> {
     job.validate()?;
     let root = job_skin(job)?;
-    let _guards = safe_fs::guard_path(&root.join("status_wnd"))?;
+    let _guards = safe_fs::guard_path(&root.join(layout(&root).status_dir()))?;
     let _lock = safe_fs::exclusive_lock(&root.join(".dmdm-install.lock"))?;
     let mut taskbar_changed = false;
     let result = (|| {
@@ -591,7 +672,11 @@ pub fn run_job(job: &Job) -> Result<(), String> {
                     &files,
                     &job.expected,
                     if matches!(job.action, Action::Restore) {
-                        "官方浅色"
+                        if layout(&root) == Layout::SplitDark {
+                            "官方皮肤"
+                        } else {
+                            "官方浅色"
+                        }
                     } else {
                         &job.label
                     },

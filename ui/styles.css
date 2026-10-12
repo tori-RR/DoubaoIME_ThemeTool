@@ -346,11 +346,18 @@ h1 .mark {
   height: 26px;
 }
 
-.toolbar-logo {
+.toolbar-logo-slot {
+  display: grid;
+  place-items: center;
   width: 26px;
   height: 26px;
-  object-fit: contain;
   flex: 0 0 26px;
+}
+
+.toolbar-logo {
+  width: var(--toolbar-logo-size, 26px);
+  height: var(--toolbar-logo-size, 26px);
+  object-fit: contain;
 }
 
 .toolbar-divider {
@@ -369,11 +376,6 @@ h1 .mark {
 
 .toolbar-icon + .toolbar-icon {
   margin-left: 2px;
-}
-
-#toolbar-mic,
-.toolbar-mic {
-  transform: translateY(1px);
 }
 
 .plugin-state {

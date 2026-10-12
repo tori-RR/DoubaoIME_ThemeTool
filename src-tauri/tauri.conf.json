@@ -1,9 +1,10 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "DoubaoIME Darkmode",
+  "productName": "DoubaoIME ThemeTool",
   "version": "1.0.1",
   "identifier": "local.doubaoime.darkmode",
   "build": {
+    "beforeBuildCommand": "node scripts/check-public-build.mjs",
     "frontendDist": "../ui"
   },
   "app": {
@@ -12,7 +13,7 @@
       {
         "label": "main",
         "create": false,
-        "title": "DoubaoIME Darkmode",
+        "title": "DoubaoIME ThemeTool",
         "width": 464,
         "height": 480,
         "resizable": false,

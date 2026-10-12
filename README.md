@@ -1,8 +1,8 @@
-# DoubaoIME Darkmode
+# DoubaoIME ThemeTool
 
 **Windows 豆包输入法** 主题修改工具，让输入法支持深色模式
 
-豆包输入法语音识别功能非常好用，但windows版目前只提供了白色主题，对深色模式下打字输入不太友好，于是做了这个皮肤插件
+这个工具最初是为了给输入法增加深色皮肤，现在也用于自定义配色、字体和图标；新版输入法已有深色模式，本工具仍提供独立的主题调整
 
 
 
@@ -40,7 +40,7 @@
 
 ## 使用方法
 
-从 [Releases](https://github.com/tori-RR/DoubaoIME_Darkmode/releases) 下载 `DoubaoIME_Darkmode.exe`
+从 [Releases](https://github.com/tori-RR/DoubaoIME_ThemeTool/releases) 下载便携 EXE；新版发布附件名为 `DoubaoIME_TT.exe`（历史版本仍可能使用 `DoubaoIME_Darkmode.exe`）
 
 启动后选择主题、字体、透明度或头像，然后安装生效
 
@@ -64,7 +64,7 @@
 插件的配置文件保存在：
 
 ```text
-C:\tmp\DoubaoIME Darkmode\
+C:\tmp\DoubaoIME_TT\
 ```
 
 主要包括：
@@ -75,9 +75,12 @@ DoubaoIME Darkmode.json.bak
 logo.png
 taskbar-icons\
 webview\
+theme-mode-<版本>.json
 ```
 
 其中 `logo.png` 和 `taskbar-icons\` 只在使用自定义图标时产生
+
+首次普通启动会复制旧 `C:\tmp\DoubaoIME Darkmode\` 中的配置、头像、任务栏草稿及外观恢复记录；不覆盖新目录已有文件，不删除旧目录，不搬 WebView 缓存。保留旧 JSON 文件名以兼容配置备份，检查模式不迁移；完成后不再重复导入。迁移失败会提示原因并暂停保存和安装，请关闭旧版助手后重试。
 
 豆包输入法原始皮肤文件的备份保存在对应版本的：
 
@@ -91,8 +94,10 @@ skin\default\dmdm_backup\
 
 当前测试兼容 `v0.9.0.0`
 
+已增加 `v0.9.2.7` 的 light/dark 分离结构适配：自定义主题修改 dark 通道并切换到官方深色模式，保留官方描边和阴影；卸载按首次记录恢复外观，保留用户后来主动选择的浅色或跟随系统模式。新结构适配不等于扩大「已验证」版本名单，版本提示仍以明确验证名单为准。
+
 > 官方更新可能改变皮肤结构，程序启动时会检查输入法的目录结构；
-> 如果检测到当前输入法结构与已验证版本不一致，会提示可能不兼容，并阻止直接安装主题；
+> 如果检测到当前输入法结构不符合已有适配器，会提示可能不兼容，并阻止直接安装主题；
 > 版本未验证但结构一致时，可尝试安装；
 
 

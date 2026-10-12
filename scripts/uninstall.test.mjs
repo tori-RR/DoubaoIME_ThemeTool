@@ -59,6 +59,11 @@ test("installed skin still reaches the restore command", () => {
     [["kaomoji", "cancel"], ["ipc", "uninstall"]]);
 });
 
+test("restored files with a pending official mode still reach settings retry", () => {
+  assert.deepEqual(clickUninstall({ theme_mode_pending: true, can_restore: true }).effects,
+    [["kaomoji", "cancel"], ["ipc", "uninstall"]]);
+});
+
 test("interrupted transactions and review mode retain their protection", () => {
   for (const status of [{ recovery_needed: true }, { review_mode: true },
     { skin_applied: true, can_restore: false }]) {

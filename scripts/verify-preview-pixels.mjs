@@ -21,7 +21,7 @@ for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) {
   image.data.set([x % 256, y % 256, ((x >> 6) + (y >> 7)) % 2 ? 235 : 20, 255], n);
 }
 const texture = `data:image/png;base64,${PNG.sync.write(image).toString("base64")}`;
-for (const dpr of [1, 1.25, 1.5, 1.75, 2]) {
+for (const logoSize of [22, 26]) for (const dpr of [1, 1.25, 1.5, 1.75, 2]) {
   // Native scale matters: viewport-only DPR emulation keeps the 1x layout grid,
   // unlike the desktop WebView's fractional-DPI layout and rasterization.
   const browser = await chromium.launch({ channel: "msedge", headless: true, args: [`--force-device-scale-factor=${dpr}`] });
@@ -30,15 +30,17 @@ for (const dpr of [1, 1.25, 1.5, 1.75, 2]) {
     const page = await context.newPage();
     await page.setContent(html);
     await page.addStyleTag({ path: fileURLToPath(new URL("ui/styles.css", root)) });
-    await page.evaluate(async src => {
+    await page.evaluate(async ({ src, logoSize }) => {
       document.getElementById("preview-toolbar").hidden = false;
+      document.getElementById("preview-toolbar").style.setProperty("--toolbar-logo-size", `${logoSize}px`);
+      document.getElementById("toolbar-logo").dataset.previewSize = String(logoSize);
       for (const id of ["toolbar-logo", "logo-picker-preview", "taskbar-logo-picker-preview"]) {
         const image = document.getElementById(id);
         image.src = src;
         image.hidden = false;
         await image.decode();
       }
-    }, source);
+    }, { src: source, logoSize });
     await page.addScriptTag({ path: fileURLToPath(new URL("ui/preview-pixels.js", root)) });
     await page.evaluate(() => {
       window.PreviewPixels.schedule();
@@ -59,7 +61,8 @@ for (const dpr of [1, 1.25, 1.5, 1.75, 2]) {
       }
       assert.ok(xs.length, `${rect.id}: expected visible synthetic pixels`);
       const painted = [Math.max(...xs) - Math.min(...xs) + 1, Math.max(...ys) - Math.min(...ys) + 1];
-      assert.deepEqual(painted, [Math.round(26 * dpr), Math.round(26 * dpr)], `${dpr}× ${rect.id}: actual painted device pixels`);
+      const size = rect.id === "toolbar-logo" ? logoSize : 26;
+      assert.deepEqual(painted, [Math.round(size * dpr), Math.round(size * dpr)], `${dpr}× ${rect.id}: actual painted device pixels`);
       result.push({ id: rect.id, painted });
     }
     await page.evaluate(async src => {
@@ -73,15 +76,15 @@ for (const dpr of [1, 1.25, 1.5, 1.75, 2]) {
     }, texture);
     const textured = PNG.sync.read(await page.screenshot());
     const crops = rects.map(rect => {
-      const size = Math.round(26 * dpr), left = Math.round(rect.left * dpr), top = Math.round(rect.top * dpr);
+      const size = Math.round((rect.id === "toolbar-logo" ? logoSize : 26) * dpr), left = Math.round(rect.left * dpr), top = Math.round(rect.top * dpr);
       return Buffer.concat(Array.from({ length: size }, (_, y) => {
         const start = ((top + y) * textured.width + left) * 4;
         return textured.data.subarray(start, start + size * 4);
       }));
     });
-    assert.deepEqual(crops[0], crops[1], `${dpr}× toolbar and picker texture pixels must match`);
+    if (logoSize === 26) assert.deepEqual(crops[0], crops[1], `${dpr}× legacy toolbar and picker texture pixels must match`);
     assert.deepEqual(crops[1], crops[2], `${dpr}× both picker texture pixels must match`);
-    console.log(JSON.stringify({ dpr, result, identicalTexturePixels: true }));
+    console.log(JSON.stringify({ logoSize, dpr, result, identicalPickerTexturePixels: true }));
     await context.close();
   } finally { await browser.close(); }
 }

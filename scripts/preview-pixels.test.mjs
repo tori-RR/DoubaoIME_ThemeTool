@@ -28,11 +28,12 @@ function harness(images = [], dpr = 1.25) {
   return { window, frames, queries, events, flush: () => frames.splice(0).forEach((fn) => fn()) };
 }
 
-function image(left, top, centered = false) {
+function image(left, top, centered = false, size = 26) {
   return {
     hidden: false,
+    dataset: { previewSize: String(size) },
     style: {},
-    rect: { left, top, width: 26, height: 26 },
+    rect: { left, top, width: size, height: size },
     measurements: [],
     getBoundingClientRect() {
       assert.equal(this.style.transform, undefined, "do not resample the image using a transform");
@@ -79,6 +80,25 @@ test("geometry defaults to DPR 1 and rejects invalid or nonsquare rectangles", (
   for (const dpr of [0, -1, NaN, Infinity, "1.25", null]) assert.equal(geometry(rect, dpr), null);
   for (const invalid of [null, {}, { ...rect, width: 0 }, { ...rect, height: -1 }, { ...rect, width: 25 }, { ...rect, left: NaN }, { ...rect, top: Infinity }]) {
     assert.equal(geometry(invalid), null);
+  }
+});
+
+test("modern 22px toolbar artwork and 26px picker artwork snap independently without drift", () => {
+  for (const dpr of [1, 1.25, 1.5, 1.75, 2]) {
+    const images = [image(55.8, 171.8, true, 22), image(58, 393.6, true)];
+    const h = harness(images, dpr);
+    for (let pass = 0; pass < 3; pass++) {
+      h.window.PreviewPixels.schedule();
+      h.flush();
+      images.forEach((entry, index) => {
+        const size = index ? 26 : 22;
+        const rect = entry.getBoundingClientRect();
+        nearly(rect.width * dpr, Math.round(size * dpr));
+        nearly(rect.height * dpr, Math.round(size * dpr));
+        nearly(rect.left * dpr, Math.round(rect.left * dpr));
+        nearly(rect.top * dpr, Math.round(rect.top * dpr));
+      });
+    }
   }
 });
 

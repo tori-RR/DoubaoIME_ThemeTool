@@ -64,6 +64,15 @@ pub fn read(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
 
 /// Flushed same-directory replacement; failures leave the old file intact.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    atomic_write_inner(path, bytes, true).map(|_| ())
+}
+
+/// Publish a complete file only if the destination does not already exist.
+pub fn atomic_write_new(path: &Path, bytes: &[u8]) -> Result<bool, String> {
+    atomic_write_inner(path, bytes, false)
+}
+
+fn atomic_write_inner(path: &Path, bytes: &[u8], replace: bool) -> Result<bool, String> {
     static SEQ: AtomicU64 = AtomicU64::new(1);
     let parent = path.parent().ok_or("缺少父目录")?;
     let _guards = guard_path(path)?;
@@ -87,15 +96,17 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
         use std::os::windows::ffi::OsStrExt;
         let from: Vec<u16> = temp.as_os_str().encode_wide().chain(Some(0)).collect();
         let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-        if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0x1 | 0x8) } == 0 {
-            return Err(format!(
-                "提交 {path:?} 失败：{}",
-                std::io::Error::last_os_error()
-            ));
+        let flags = 0x8 | u32::from(replace);
+        if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), flags) } == 0 {
+            let err = std::io::Error::last_os_error();
+            if !replace && matches!(err.raw_os_error(), Some(80 | 183)) {
+                return Ok(false);
+            }
+            return Err(format!("提交 {path:?} 失败：{}", err));
         }
-        Ok(())
+        Ok(true)
     })();
-    if result.is_err() {
+    if !matches!(result, Ok(true)) {
         let _ = fs::remove_file(&temp);
     }
     result

@@ -31,7 +31,8 @@ try {
   if ($binaryVersion -ne $conf.version) { throw "Built product version mismatch: $binaryVersion" }
   $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
   $flavor = if ($Development) { 'test' } else { 'release' }
-  $name = "DoubaoIME_Darkmode-$($conf.version)-$flavor-$commit-$stamp.exe"
+  # Release upload name: DoubaoIME_TT.exe. Local builds remain uniquely labelled.
+  $name = "DoubaoIME_TT-$($conf.version)-$flavor-$commit-$stamp.exe"
   $dist = Join-Path $root 'dist'
   New-Item -ItemType Directory -Force -Path $dist | Out-Null
   $out = Join-Path $dist $name

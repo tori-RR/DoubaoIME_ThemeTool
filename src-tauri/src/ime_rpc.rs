@@ -178,6 +178,47 @@ pub fn toggle_toolbar() -> Result<bool, String> {
     }
     Ok(actual)
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    Light,
+    Dark,
+    System,
+}
+
+fn parse_theme_mode(response: &Value) -> Result<ThemeMode, String> {
+    serde_json::from_value(
+        response
+            .pointer("/payload/snapshot/appearance/themeMode")
+            .cloned()
+            .ok_or("读不到官方外观模式")?,
+    )
+    .map_err(|_| "官方外观模式不受支持".into())
+}
+fn read_theme_mode() -> Result<ThemeMode, String> {
+    parse_theme_mode(&call("settings.get", None)?)
+}
+pub fn theme_mode() -> Result<ThemeMode, String> {
+    let _lock = LOCK.lock().map_err(|_| "设置连接状态异常")?;
+    read_theme_mode()
+}
+/// `expected` is used on uninstall: preserve a later user-selected mode.
+pub fn set_theme_mode(next: ThemeMode, expected: Option<ThemeMode>) -> Result<(), String> {
+    let _lock = LOCK.lock().map_err(|_| "设置连接状态异常")?;
+    let current = read_theme_mode()?;
+    if current == next || expected.is_some_and(|value| value != current) {
+        return Ok(());
+    }
+    call(
+        "settings.update",
+        Some(json!({"patch":{"appearance":{"themeMode":next}}})),
+    )?;
+    if read_theme_mode()? != next {
+        return Err("输入法未接受外观模式设置".into());
+    }
+    Ok(())
+}
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn ReadFile(h: Handle, buf: *mut c_void, len: u32, read: *mut u32, ov: *mut Overlapped) -> i32;
@@ -202,6 +243,28 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::os::windows::{ffi::OsStrExt, io::FromRawHandle};
+    #[test]
+    fn theme_mode_requires_known_explicit_snapshot_value() {
+        for (name, mode) in [
+            ("light", ThemeMode::Light),
+            ("dark", ThemeMode::Dark),
+            ("system", ThemeMode::System),
+        ] {
+            assert_eq!(
+                parse_theme_mode(
+                    &json!({"payload":{"snapshot":{"appearance":{"themeMode":name}}}})
+                )
+                .unwrap(),
+                mode
+            );
+            assert_eq!(serde_json::to_value(mode).unwrap(), json!(name));
+        }
+        assert!(parse_theme_mode(&json!({})).is_err());
+        assert!(parse_theme_mode(
+            &json!({"payload":{"snapshot":{"appearance":{"themeMode":"automatic"}}}})
+        )
+        .is_err());
+    }
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn CreateNamedPipeW(

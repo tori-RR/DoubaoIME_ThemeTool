@@ -63,7 +63,7 @@
     return !!(
       el &&
       el.closest &&
-      el.closest("#btn-install, #btn-uninstall, #btn-clear-logo, #btn-preview-bg")
+      el.closest("#btn-install, #btn-uninstall, #btn-clear-logo, #btn-preview-bg, #app-menu")
     );
   }
 

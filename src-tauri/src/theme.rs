@@ -77,7 +77,7 @@ fn hex_rgb(hex: &str) -> Result<(u8, u8, u8), String> {
     ))
 }
 
-fn argb(hex: &str, alpha: u8) -> Result<String, String> {
+pub(crate) fn argb(hex: &str, alpha: u8) -> Result<String, String> {
     let (r, g, b) = hex_rgb(hex)?;
     Ok(format!("#{alpha:02X}{r:02X}{g:02X}{b:02X}"))
 }
@@ -107,7 +107,7 @@ pub fn opacity_to_percent(raw: &str) -> Option<u8> {
     Some((v * 100.0).round() as u8)
 }
 
-fn percent_to_alpha(percent: u8) -> u8 {
+pub(crate) fn percent_to_alpha(percent: u8) -> u8 {
     ((u16::from(percent) * 255 + 50) / 100) as u8
 }
 
@@ -116,7 +116,7 @@ pub fn glass_accent_opacity(bar_percent: u8) -> u8 {
 }
 
 /// Require exactly one matching node; preserve all unrelated XML and layout.
-fn set_tag_attrs(
+pub(crate) fn set_tag_attrs(
     xml: &str,
     tag: &str,
     name: Option<&str>,
@@ -180,7 +180,7 @@ fn set_tag_attrs(
 }
 
 /// Preserve official Light colours and layout; replace exactly both font nodes.
-fn official_window_xml(official: &str, fonts: &FontChoice) -> Result<String, String> {
+pub(crate) fn official_window_xml(official: &str, fonts: &FontChoice) -> Result<String, String> {
     let face = xml_face(&fonts.face);
     let xml = set_tag_attrs(official, "Font", Some("word"), &[("facename", &face)])?;
     set_tag_attrs(&xml, "Font", Some("number"), &[("facename", &face)])
@@ -275,7 +275,7 @@ fn recolor_svg(src: &str, background: &str, fill_opacity: Option<&str>) -> Resul
     Ok(re.replace_all(src, repl).into_owned())
 }
 
-const STATUS_WND_FILES: &[&str] = &[
+pub(crate) const STATUS_WND_FILES: &[&str] = &[
     "status_bar_bg.svg",
     "status_divider.svg",
     "mic_normal.svg",
@@ -361,6 +361,7 @@ fn generate_status_wnd(
 #[derive(Serialize)]
 pub struct ToolbarPreview {
     pub logo: Option<Vec<u8>>,
+    pub logo_size: u8,
     pub bg: String,
     pub divider: String,
     pub mic: String,
@@ -392,7 +393,20 @@ pub fn generate_toolbar_preview(
     let lang_raw = read("lang_cn_normal.svg")?;
     let punct_raw = read("punct_cn_normal.svg")?;
     let half_raw = read("half_shape_normal.svg")?;
-    let (bg, divider, mic, lang, punct, half) = if keep_official {
+    let modern = src_dir
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|n| n == "dark");
+    let (bg, divider, mic, lang, punct, half) = if modern {
+        (
+            crate::theme_modern::background(&bg_raw, "#262626", &colors.background, glass_opacity)?,
+            div_raw,
+            crate::theme_modern::icon(&mic_raw, &colors)?,
+            crate::theme_modern::icon(&lang_raw, &colors)?,
+            crate::theme_modern::icon(&punct_raw, &colors)?,
+            crate::theme_modern::icon(&half_raw, &colors)?,
+        )
+    } else if keep_official {
         (bg_raw, div_raw, mic_raw, lang_raw, punct_raw, half_raw)
     } else {
         (
@@ -411,6 +425,9 @@ pub fn generate_toolbar_preview(
     };
     Ok(ToolbarPreview {
         logo,
+        // Split skins set normalimage size='22,22' inside a 26px logo button.
+        // Legacy skins retain the previous full-size avatar preview.
+        logo_size: if modern { 22 } else { 26 },
         bg,
         divider,
         mic,
@@ -510,6 +527,9 @@ pub fn generate_patch(
     opacity: u8,
     logo: Option<&[u8]>,
 ) -> Result<crate::transaction::Files, String> {
+    if originals.contains_key("color/color_dark.xml") {
+        return crate::theme_modern::generate(originals, colors, fonts, opacity, logo);
+    }
     let colors = colors.clone().normalize()?;
     let fonts = fonts.clone().normalize()?;
     let glass = glass_enabled(opacity);
@@ -556,7 +576,7 @@ pub fn generate_patch(
     Ok(out)
 }
 
-fn validate_xml(xml: &str) -> Result<(), String> {
+pub(crate) fn validate_xml(xml: &str) -> Result<(), String> {
     let mut reader = quick_xml::Reader::from_str(xml);
     loop {
         match reader.read_event() {
@@ -852,6 +872,7 @@ mod tests {
         .unwrap();
         assert!(light.bg.contains(r#"fill="white""#));
         assert_eq!(light.logo.as_deref(), Some(b"user".as_slice()));
+        assert_eq!(light.logo_size, 26);
         let _ = fs::remove_dir_all(&originals);
     }
 

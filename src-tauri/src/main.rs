@@ -12,6 +12,8 @@ mod safe_fs;
 mod skin;
 mod taskbar_icon;
 mod theme;
+mod theme_mode;
+mod theme_modern;
 mod transaction;
 mod workdir;
 
@@ -154,6 +156,7 @@ struct AppStatus {
     has_custom_taskbar_logo: bool,
     taskbar_logo_revision: String,
     taskbar_icon_pending: bool,
+    theme_mode_pending: bool,
     can_restore: bool,
     recovery_needed: bool,
     review_mode: bool,
@@ -179,6 +182,15 @@ fn old_appdata_dir() -> PathBuf {
 }
 
 fn migrate_legacy_state() {
+    if workdir::migrate_legacy_dir(|raw| {
+        serde_json::from_slice::<UiState>(raw)
+            .map(|_| ())
+            .map_err(|err| format!("旧配置无效：{err}"))
+    })
+    .is_err()
+    {
+        return;
+    }
     if workdir::review_mode() || state_path().exists() {
         return;
     }
@@ -205,6 +217,7 @@ fn migrate_legacy_state() {
     }
 }
 fn state_lock() -> Result<std::fs::File, String> {
+    workdir::check_migration()?;
     let dir = workdir::ensure_app_dir()?;
     safe_fs::exclusive_lock(&dir.join(".state.lock"))
 }
@@ -293,7 +306,7 @@ fn current_status() -> AppStatus {
                 true,
                 format!(
                     "安装结构一致（{} 个必需文件）",
-                    skin::official_hashes().len()
+                    skin::layout(&target.skin).paths().len()
                 ),
             ),
             Err(err) => (false, err),
@@ -411,6 +424,27 @@ fn current_status() -> AppStatus {
     {
         warning = "配置文件损坏，原文件已保留；保存已暂停".into();
     }
+    let theme_mode_pending = match version
+        .as_deref()
+        .map(|v| theme_mode::pending(v, applied))
+        .transpose()
+    {
+        Ok(value) => value.unwrap_or(false),
+        Err(err) => {
+            warning = err;
+            true
+        }
+    };
+    if theme_mode_pending && warning.is_empty() {
+        warning = "官方外观模式尚未同步，请再次安装或卸载重试".into();
+    }
+    let migration_ok = match workdir::check_migration() {
+        Ok(()) => true,
+        Err(err) => {
+            warning = err;
+            false
+        }
+    };
     AppStatus {
         ime_installed: installed,
         ime_version: version,
@@ -421,7 +455,7 @@ fn current_status() -> AppStatus {
             .collect(),
         ime_structure_matches: structure_matches,
         ime_structure_detail: structure_detail,
-        ime_compatible: compatible,
+        ime_compatible: compatible && migration_ok,
         skin_applied: applied || taskbar_managed,
         installed_label: if !applied && taskbar_managed {
             "任务栏图标".into()
@@ -439,7 +473,8 @@ fn current_status() -> AppStatus {
         has_custom_taskbar_logo,
         taskbar_logo_revision,
         taskbar_icon_pending: taskbar_icon_pending || workdir::shell_refresh_pending(),
-        can_restore: can_restore || taskbar_managed,
+        theme_mode_pending,
+        can_restore: migration_ok && (can_restore || taskbar_managed || theme_mode_pending),
         recovery_needed: recovery || taskbar_recovery,
         review_mode: workdir::review_mode(),
         warning,
@@ -448,6 +483,7 @@ fn current_status() -> AppStatus {
     }
 }
 fn prepare_job(action: skin::Action, colors: Option<ThemeColors>) -> Result<skin::Job, String> {
+    workdir::check_migration()?;
     let target = skin::detect_for_status()?;
     let store = skin::store_for(&target)?;
     let action = if store.recovery_needed()? || taskbar_icon::recovery_needed()? {
@@ -636,6 +672,10 @@ async fn perform(
                 && !status.recovery_needed
                 && (status.ime_compatible || !status.ime_installed)
             {
+                if status.theme_mode_pending {
+                    theme_mode::finish(&skin::detect_for_status()?)?;
+                    return Ok(current_status());
+                }
                 return Ok(status);
             }
         }
@@ -793,7 +833,7 @@ fn clear_logo() -> Result<AppStatus, String> {
     Ok(current_status())
 }
 
-const PUBLIC_REPO_URL: &str = "https://github.com/tori-RR/DoubaoIME_Darkmode";
+const PUBLIC_REPO_URL: &str = "https://github.com/tori-RR/DoubaoIME_ThemeTool";
 
 fn open_folder(path: &Path) -> Result<(), String> {
     std::process::Command::new("explorer")
@@ -881,7 +921,10 @@ fn main() {
         std::process::exit(code);
     }
     migrate_legacy_state();
-    if let Some(version) = workdir::restart_pending_version() {
+    if let Some(version) = workdir::check_migration()
+        .ok()
+        .and_then(|_| workdir::restart_pending_version())
+    {
         if ime_process::restart(Path::new(skin::IME_ROOT), &version).is_ok() {
             workdir::clear_restart_pending();
         }
@@ -902,7 +945,7 @@ fn main() {
             let mut window =
                 tauri::WebviewWindowBuilder::from_config(app, cfg)?.data_directory(webview_dir);
             if workdir::review_mode() {
-                window = window.title("DoubaoIME Darkmode · 检查模式");
+                window = window.title("DoubaoIME ThemeTool · 检查模式");
             }
             let win = window.build()?;
             win.on_window_event({

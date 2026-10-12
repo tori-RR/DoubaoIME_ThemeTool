@@ -51,6 +51,18 @@ pub fn run_elevated(job: &skin::Job) -> Result<(), String> {
     if shell_may_change {
         crate::workdir::write_shell_refresh_pending()?;
     }
+    let mode_prepared = match crate::theme_mode::prepare(job) {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            crate::workdir::clear_restart_pending();
+            if !shell_was_pending {
+                crate::workdir::clear_shell_refresh_pending();
+            }
+            let _ = fs::remove_file(&path);
+            let _ = fs::remove_dir(&dir);
+            return Err(err);
+        }
+    };
     let code = match shell_runas(&exe, &params) {
         Ok(code) => code,
         Err(err) => {
@@ -58,6 +70,11 @@ pub fn run_elevated(job: &skin::Job) -> Result<(), String> {
                 crate::workdir::clear_restart_pending();
                 if !shell_was_pending {
                     crate::workdir::clear_shell_refresh_pending();
+                }
+                if let Some(prepared) = mode_prepared {
+                    prepared
+                        .cancel()
+                        .map_err(|e| format!("{err}；恢复模式记录失败：{e}"))?;
                 }
             }
             // The request is deliberately retained when helper liveness is unknown.
@@ -105,7 +122,15 @@ pub fn run_elevated(job: &skin::Job) -> Result<(), String> {
     if code != 0 {
         return Err(format!("管理员助手异常退出（{code}），请检查事务恢复提示"));
     }
-    restarted.and(shell_restarted)
+    let mode_updated = if restarted.is_ok() {
+        crate::theme_mode::finish(&skin::DetectedIme {
+            version: job.version.clone(),
+            skin: receipt_root,
+        })
+    } else {
+        Ok(())
+    };
+    restarted.and(shell_restarted).and(mode_updated)
 }
 fn quote(path: &Path) -> String {
     format!("\"{}\"", path.display())

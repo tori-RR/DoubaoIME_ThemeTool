@@ -4,7 +4,7 @@
   let pending = false;
   let resolutionQuery = null;
 
-  // Keep all three 26px previews on the same physical-pixel grid at fractional DPI.
+  // Snap each image's own draw size without resizing its button or slot.
   function geometry(rect, dpr = 1) {
     if (!rect || ![rect.left, rect.top, rect.width, rect.height, dpr].every(Number.isFinite)
       || rect.width <= 0 || rect.height <= 0 || dpr <= 0
@@ -35,9 +35,11 @@
     const placements = images.map((image) => {
       if (image.hidden || typeof image.getBoundingClientRect !== "function") return null;
       const rect = image.getBoundingClientRect();
-      if (Math.abs(rect.width - 26) > 0.0001 || Math.abs(rect.height - 26) > 0.0001) return null;
+      const size = Number(image.dataset?.previewSize || 26);
+      if (![22, 26].includes(size)
+        || Math.abs(rect.width - size) > 0.0001 || Math.abs(rect.height - size) > 0.0001) return null;
       // DOMRect float precision must not turn a nominal 32.5px into 32.499999px.
-      return geometry({ left: rect.left, top: rect.top, width: 26, height: 26 }, root.devicePixelRatio === undefined ? 1 : root.devicePixelRatio);
+      return geometry({ left: rect.left, top: rect.top, width: size, height: size }, root.devicePixelRatio === undefined ? 1 : root.devicePixelRatio);
     });
     images.forEach((image, index) => {
       const placement = placements[index];
