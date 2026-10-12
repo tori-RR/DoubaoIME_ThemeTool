@@ -1,9 +1,6 @@
 # DoubaoIME ThemeTool
 
-**Windows 豆包输入法** 主题修改工具，让输入法支持深色模式
-
-豆包输入法语音识别功能非常好用，但windows版目前只提供了白色主题，对深色模式下打字输入不太友好，于是做了这个皮肤插件
-
+**Windows 豆包输入法** 主题修改工具，支持自定义皮肤和字体
 
 
 ---
@@ -70,17 +67,7 @@
 插件的配置文件保存在：
 
 ```text
-C:\tmp\DoubaoIME Darkmode\
-```
-
-主要包括：
-
-```text
-DoubaoIME Darkmode.json
-DoubaoIME Darkmode.json.bak
-logo.png
-taskbar-icons\
-webview\
+C:\tmp\DoubaoIME_TT\
 ```
 
 其中 `logo.png` 和 `taskbar-icons\` 只在使用自定义图标时产生
@@ -95,7 +82,7 @@ skin\default\dmdm_backup\
 
 ### 兼容性
 
-当前测试兼容 `v0.9.0.0`
+当前测试兼容 `v0.9.2.7`
 
 > 官方更新可能改变皮肤结构，程序启动时会检查输入法的目录结构；
 > 如果检测到当前输入法结构与已验证版本不一致，会提示可能不兼容，并阻止直接安装主题；
