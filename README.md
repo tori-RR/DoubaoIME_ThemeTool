@@ -1,4 +1,4 @@
-# DoubaoIME Darkmode
+# DoubaoIME ThemeTool
 
 **Windows 豆包输入法** 主题修改工具，让输入法支持深色模式
 
@@ -40,15 +40,21 @@
 
 ## 使用方法
 
-从 [Releases](https://github.com/tori-RR/DoubaoIME_Darkmode/releases) 下载 `DoubaoIME_Darkmode.exe`
+### 下载
+[Releases](https://github.com/tori-RR/DoubaoIME_Darkmode/releases)  `DoubaoIME_TT.exe`
 
-启动后选择主题、字体、透明度或头像，然后安装生效
+### 安装
+
+启动后选择主题、字体、透明度或头像
+点击安装生效
+
+### 恢复
 
 需要恢复官方皮肤时，点击卸载即可从安装主题时创建的备份恢复原始文件
 
 > 安装或卸载主题时程序需要修改：`C:\Program Files\DoubaoIME` 因此会请求管理员权限
 >
-> 任务栏图标变更后会刷新资源管理器，屏幕会短暂闪烁
+> 任务栏图标变更后会刷新资源管理器
 
 
 
@@ -96,16 +102,8 @@ skin\default\dmdm_backup\
 > 版本未验证但结构一致时，可尝试安装；
 
 
-
-
 ---
 
-## 声明
+## License
 
-本项目为独立第三方工具，非官方插件，也不代表官方支持
-
-仓库不包含豆包输入法官方 SVG / XML / PNG 皮肤资源及其修改版本 
-
-所有主题文件均在点击「安装」时，根据本机已安装的输入法资源即时生成，不携带或分发官方皮肤文件
-
-本仓库以 MIT License 发布，详见 [LICENSE](LICENSE)。
+[MIT](LICENSE)
