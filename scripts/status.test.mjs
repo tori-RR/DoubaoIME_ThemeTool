@@ -99,6 +99,15 @@ test("unverified but compatible structure remains installable", () => {
   assert.equal(installDisabled({ review_mode: true }), true);
 });
 
+test("0.9.2.7 is explicitly verified but structure compatibility stays independent", () => {
+  for (const matches of [true, false]) {
+    const view = paintStatus({ ime_version: "v0.9.2.7",
+      verified_ime_versions: ["v0.9.0.0", "v0.9.2.7"], ime_structure_matches: matches });
+    assert.equal(view.imeVersionTipText.textContent, `已验证${matches ? "" : "\n可能不兼容"}`);
+    assert.equal(view.imeState.className, `plugin-state ${matches ? "on" : "warn"}`);
+  }
+});
+
 test("no IME and ambiguous version have honest fallback text", () => {
   const missing = paintStatus({ ime_installed: false });
   assert.equal(missing.imeStateText.textContent, "未安装");

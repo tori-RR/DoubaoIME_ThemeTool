@@ -47,6 +47,52 @@ pub fn background(src: &str, old: &str, color: &str, opacity: u8) -> Result<Stri
     Ok(out)
 }
 
+fn recolor_border(src: String, old: &str, new: &str) -> Result<String, String> {
+    if src.matches(old).count() != 1 {
+        return Err("深色背景描边结构已变化".into());
+    }
+    // Change only the known border colour/alpha, retaining geometry and shadow.
+    Ok(src.replacen(old, new, 1))
+}
+
+pub fn candidate_background(
+    src: &str,
+    color: &str,
+    opacity: u8,
+    light: bool,
+) -> Result<String, String> {
+    let out = background(src, "#151515", color, opacity)?;
+    let border = if light {
+        "black"
+    } else {
+        theme::adaptive_border_color(color)?
+    };
+    recolor_border(
+        out,
+        r#"fill="white" fill-opacity="0.08""#,
+        &format!(r#"fill="{border}" fill-opacity="0.08""#),
+    )
+}
+
+pub fn toolbar_background(
+    src: &str,
+    color: &str,
+    opacity: u8,
+    light: bool,
+) -> Result<String, String> {
+    let out = background(src, "#262626", color, opacity)?;
+    let (border, alpha) = if light {
+        ("black", "0.1")
+    } else {
+        (theme::adaptive_border_color(color)?, "0.08")
+    };
+    recolor_border(
+        out,
+        r#"stroke="white" stroke-opacity="0.08""#,
+        &format!(r#"stroke="{border}" stroke-opacity="{alpha}""#),
+    )
+}
+
 pub fn icon(src: &str, colors: &theme::ThemeColors) -> Result<String, String> {
     let normal = r#"fill="white" fill-opacity="0.85""#;
     let accent = r##"fill="#5B8CFF""##;
@@ -131,6 +177,7 @@ pub fn generate(
     originals: &Files,
     colors: &theme::ThemeColors,
     fonts: &FontChoice,
+    light: bool,
     opacity: u8,
     logo: Option<&[u8]>,
 ) -> Result<Files, String> {
@@ -138,6 +185,7 @@ pub fn generate(
         return Err("深色皮肤文件清单不完整".into());
     }
     let colors = colors.clone().normalize()?;
+    let light = light && colors == theme::light_colors();
     let fonts = fonts.clone().normalize()?;
     let text = |path: &str| -> Result<&str, String> {
         std::str::from_utf8(originals.get(path).ok_or_else(|| format!("缺少 {path}"))?)
@@ -176,7 +224,7 @@ pub fn generate(
         let path = format!("dark/composition/bk_image_{i}.svg");
         out.insert(
             path.clone(),
-            background(text(&path)?, "#151515", &colors.background, opacity)?.into_bytes(),
+            candidate_background(text(&path)?, &colors.background, opacity, light)?.into_bytes(),
         );
     }
     let path = "dark/composition/page_open.svg";
@@ -196,7 +244,7 @@ pub fn generate(
         let path = format!("dark/status_wnd/{name}");
         let raw = text(&path)?;
         let svg = match *name {
-            "status_bar_bg.svg" => background(raw, "#262626", &colors.background, opacity)?,
+            "status_bar_bg.svg" => toolbar_background(raw, &colors.background, opacity, light)?,
             "status_divider.svg" => raw.to_owned(),
             _ => icon(raw, &colors)?,
         };
@@ -256,8 +304,17 @@ mod tests {
             theme::dark_colors(),
             theme::light_colors(),
             theme::mix_colors(),
+            theme::ThemeColors {
+                background: "#FEE5CA".into(),
+                ..theme::mix_colors()
+            },
+            theme::ThemeColors {
+                background: "#1C2233".into(),
+                ..theme::mix_colors()
+            },
         ] {
-            let out = generate(&original, &colors, &FontChoice::default(), 70, None).unwrap();
+            let out =
+                generate(&original, &colors, &FontChoice::default(), false, 70, None).unwrap();
             assert!(out.keys().eq(original.keys()));
             let window = std::str::from_utf8(&out["window.xml"]).unwrap();
             assert!(window.contains(r#"textcolor="candidate_text""#));
@@ -287,6 +344,7 @@ mod tests {
             &changed,
             &theme::dark_colors(),
             &FontChoice::default(),
+            false,
             100,
             None
         )
@@ -326,6 +384,14 @@ mod tests {
             theme::dark_colors(),
             theme::light_colors(),
             theme::mix_colors(),
+            theme::ThemeColors {
+                background: "#FEE5CA".into(),
+                ..theme::mix_colors()
+            },
+            theme::ThemeColors {
+                background: "#1C2233".into(),
+                ..theme::mix_colors()
+            },
         ] {
             for opacity in [20, 70, 100] {
                 let out = theme::generate_patch(
@@ -339,7 +405,7 @@ mod tests {
                 .unwrap();
                 for i in 1..=7 {
                     let path = format!("dark/composition/bk_image_{i}.svg");
-                    let expected = std::str::from_utf8(&original[&path]).unwrap().replace(
+                    let mut expected = std::str::from_utf8(&original[&path]).unwrap().replace(
                         r##"fill="#151515""##,
                         &format!(
                             r#"fill="{}" fill-opacity="{}""#,
@@ -347,6 +413,12 @@ mod tests {
                             theme::glass_opacity_attr(opacity)
                         ),
                     );
+                    if theme::adaptive_border_color(&colors.background).unwrap() == "black" {
+                        expected = expected.replace(
+                            r#"fill="white" fill-opacity="0.08""#,
+                            r#"fill="black" fill-opacity="0.08""#,
+                        );
+                    }
                     assert_eq!(out[&path], expected.as_bytes());
                 }
                 for (path, bytes) in &out {
@@ -355,7 +427,7 @@ mod tests {
                     }
                 }
                 let preview = theme::generate_toolbar_preview(
-                    &target.skin.join("dark/status_wnd"),
+                    &temp.join("dark/status_wnd"),
                     &colors,
                     opacity < 100,
                     opacity,
@@ -398,7 +470,7 @@ mod tests {
         );
         // Only the explicitly created temporary fixture is removed.
         std::fs::remove_dir_all(&temp).unwrap();
-        println!("0.9.2.7: 31 sources; 9 in-memory palettes/opacity patches; 9 temp install/restore cycles; live files unchanged");
+        println!("0.9.2.7: 31 sources; 15 in-memory palettes/opacity patches; 15 temp install/restore cycles; live files unchanged");
     }
     #[test]
     fn face_only_preserves_border_and_shadow_exactly() {
@@ -427,6 +499,101 @@ mod tests {
             "#151515",
             "#123456",
             100
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn light_borders_borrow_official_colour_and_alpha_only() {
+        let original = fixture();
+        for opacity in [20, 70, 100] {
+            let out = theme::generate_patch(
+                &original,
+                &theme::light_colors(),
+                &FontChoice::default(),
+                true,
+                opacity,
+                None,
+            )
+            .unwrap();
+            for i in 1..=7 {
+                let path = format!("dark/composition/bk_image_{i}.svg");
+                let raw = std::str::from_utf8(&original[&path]).unwrap();
+                let expected = background(raw, "#151515", "#FFFFFF", opacity)
+                    .unwrap()
+                    .replace(
+                        r#"fill="white" fill-opacity="0.08""#,
+                        r#"fill="black" fill-opacity="0.08""#,
+                    );
+                assert_eq!(out[&path], expected.as_bytes());
+            }
+            let path = "dark/status_wnd/status_bar_bg.svg";
+            let raw = std::str::from_utf8(&original[path]).unwrap();
+            let expected = background(raw, "#262626", "#FFFFFF", opacity)
+                .unwrap()
+                .replace(
+                    r#"stroke="white" stroke-opacity="0.08""#,
+                    r#"stroke="black" stroke-opacity="0.1""#,
+                );
+            assert_eq!(out[path], expected.as_bytes());
+            assert!(expected.contains(r#"stroke-width="0.5""#));
+        }
+    }
+
+    #[test]
+    fn adaptive_borders_follow_background_without_changing_other_bytes() {
+        let original = fixture();
+        for (background_color, border) in [
+            ("#2A2A2A", "white"),
+            ("#3D57D6", "white"),
+            ("#FFFFFF", "black"),
+            ("#FEE5CA", "black"),
+            ("#757575", "white"),
+            ("#767676", "black"),
+        ] {
+            let mut colors = theme::mix_colors();
+            colors.background = background_color.into();
+            let out =
+                generate(&original, &colors, &FontChoice::default(), false, 70, None).unwrap();
+            for (path, old, attribute) in [
+                ("dark/composition/bk_image_1.svg", "#151515", "fill"),
+                ("dark/status_wnd/status_bar_bg.svg", "#262626", "stroke"),
+            ] {
+                let raw = std::str::from_utf8(&original[path]).unwrap();
+                let expected = background(raw, old, &colors.background, 70)
+                    .unwrap()
+                    .replace(
+                        &format!(r#"{attribute}="white" {attribute}-opacity="0.08""#),
+                        &format!(r#"{attribute}="{border}" {attribute}-opacity="0.08""#),
+                    );
+                assert_eq!(out[path], expected.as_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn light_border_rejects_ambiguous_or_changed_sources() {
+        let candidate =
+            r##"<svg><rect fill="white" fill-opacity="0.08"/><path fill="#151515"/></svg>"##;
+        assert!(
+            candidate_background(&candidate.replace("0.08", "0.09"), "#FFFFFF", 70, true).is_err()
+        );
+        let toolbar = r##"<svg><rect fill="#262626"/><rect stroke="white" stroke-opacity="0.08" stroke-width="0.5"/></svg>"##;
+        assert!(toolbar_background(
+            &toolbar.replace("stroke=\"white\"", "stroke=\"#FFFFFF\""),
+            "#FFFFFF",
+            100,
+            true
+        )
+        .is_err());
+        assert!(candidate_background(
+            &candidate.replace(
+                "</svg>",
+                "<rect fill=\"white\" fill-opacity=\"0.08\"/></svg>"
+            ),
+            "#FFFFFF",
+            100,
+            true
         )
         .is_err());
     }

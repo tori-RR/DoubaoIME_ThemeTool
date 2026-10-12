@@ -49,13 +49,14 @@ pub fn session() -> Result<u32, String> {
 
 enum ProbeError {
     Changed,
+    Denied(String),
     Fatal(String),
 }
 
 fn probe_failure(permission_message: &str) -> ProbeError {
     let code = unsafe { GetLastError() };
     if code == ERROR_ACCESS_DENIED {
-        ProbeError::Fatal(permission_message.into())
+        ProbeError::Denied(permission_message.into())
     } else {
         ProbeError::Changed
     }
@@ -77,7 +78,7 @@ fn path_of_probe(handle: Handle) -> Result<PathBuf, ProbeError> {
 fn path_of(handle: Handle) -> Result<PathBuf, String> {
     path_of_probe(handle).map_err(|err| match err {
         ProbeError::Changed => "输入法进程发生变化，请重试".into(),
-        ProbeError::Fatal(message) => message,
+        ProbeError::Denied(message) | ProbeError::Fatal(message) => message,
     })
 }
 
@@ -124,13 +125,25 @@ fn processes_once() -> Result<Vec<ImeProcess>, ProbeError> {
 }
 
 pub fn processes() -> Result<Vec<ImeProcess>, String> {
+    retry_probe(processes_once, || {
+        std::thread::sleep(PROCESS_PROBE_RETRY_DELAY);
+    })
+}
+
+fn retry_probe(
+    mut probe: impl FnMut() -> Result<Vec<ImeProcess>, ProbeError>,
+    mut pause: impl FnMut(),
+) -> Result<Vec<ImeProcess>, String> {
     for attempt in 0..PROCESS_PROBE_ATTEMPTS {
-        match processes_once() {
+        match probe() {
             Ok(processes) => return Ok(processes),
             Err(ProbeError::Fatal(message)) => return Err(message),
-            Err(ProbeError::Changed) if attempt + 1 < PROCESS_PROBE_ATTEMPTS => {
-                std::thread::sleep(PROCESS_PROBE_RETRY_DELAY);
+            // A restarting process can briefly reject a path query. Retry the
+            // entire snapshot, but never accept a process with an unknown path.
+            Err(_) if attempt + 1 < PROCESS_PROBE_ATTEMPTS => {
+                pause();
             }
+            Err(ProbeError::Denied(message)) => return Err(message),
             Err(ProbeError::Changed) => {
                 return Err("输入法进程持续变化，请稍后重试".into());
             }
@@ -195,27 +208,75 @@ pub fn restart(root: &Path, version: &str) -> Result<(), String> {
     let service = root.join("versions").join(version).join("ImeService.exe");
     let _guards = crate::safe_fs::guard_path(&watchdog)?;
     let current = session()?;
-    if !processes()?
-        .iter()
-        .any(|p| p.session == current && same_path(&p.path, &watchdog))
-    {
-        std::process::Command::new(&watchdog)
-            .creation_flags(0x0800_0000 | 0x8)
-            .spawn()
-            .map_err(|e| format!("启动输入法失败：{e}"))?;
-    }
     let deadline = Instant::now() + Duration::from_secs(8);
+    wait_for_restart(
+        &watchdog,
+        &service,
+        current,
+        processes,
+        || {
+            std::process::Command::new(&watchdog)
+                .creation_flags(0x0800_0000 | 0x8)
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| format!("启动输入法失败：{e}"))
+        },
+        || {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(150));
+            Instant::now() < deadline
+        },
+    )
+}
+
+fn wait_for_restart(
+    watchdog: &Path,
+    service: &Path,
+    current: u32,
+    mut probe: impl FnMut() -> Result<Vec<ImeProcess>, String>,
+    mut launch: impl FnMut() -> Result<(), String>,
+    mut pause: impl FnMut() -> bool,
+) -> Result<(), String> {
+    let mut launched = false;
+    let mut previous_pid = None;
     loop {
-        if processes()?
-            .iter()
-            .any(|p| p.session == current && same_path(&p.path, &service))
-        {
-            return Ok(());
+        let error = match probe() {
+            Ok(list) => {
+                // Launch only after a complete, verified snapshot confirms the
+                // watchdog is absent. A failed probe must not start duplicates.
+                if !launched
+                    && !list
+                        .iter()
+                        .any(|p| p.session == current && same_path(&p.path, watchdog))
+                {
+                    launch()?;
+                    launched = true;
+                }
+                let pid = list
+                    .iter()
+                    .find(|p| p.session == current && same_path(&p.path, service))
+                    .map(|p| p.pid);
+                // Startup can replace an initial service process. Require two
+                // successive verified snapshots of the same service instance.
+                if pid.is_some() && pid == previous_pid {
+                    return Ok(());
+                }
+                previous_pid = pid;
+                None
+            }
+            Err(error) => {
+                previous_pid = None;
+                Some(error)
+            }
+        };
+        if !pause() {
+            return Err(match error {
+                Some(error) => format!("皮肤操作已结束，但输入法恢复超时：{error}"),
+                None => "皮肤操作已结束，但输入法未恢复；请手动打开豆包输入法".into(),
+            });
         }
-        if Instant::now() >= deadline {
-            return Err("皮肤操作已结束，但输入法未恢复；请手动打开豆包输入法".into());
-        }
-        std::thread::sleep(Duration::from_millis(150));
     }
 }
 
@@ -231,4 +292,150 @@ unsafe extern "system" {
     fn GetLastError() -> u32;
     fn TerminateProcess(h: Handle, code: u32) -> i32;
     fn WaitForSingleObject(h: Handle, ms: u32) -> u32;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    fn process(pid: u32, path: &str) -> ImeProcess {
+        ImeProcess {
+            pid,
+            session: 1,
+            path: PathBuf::from(path),
+        }
+    }
+
+    #[test]
+    fn temporary_access_denial_retries_but_persistent_denial_stays_an_error() {
+        let mut attempts = 0;
+        let list = retry_probe(
+            || {
+                attempts += 1;
+                if attempts < 3 {
+                    Err(ProbeError::Denied("path denied".into()))
+                } else {
+                    Ok(vec![process(10, "service")])
+                }
+            },
+            || {},
+        )
+        .unwrap();
+        assert_eq!(list[0].pid, 10);
+        assert_eq!(attempts, 3);
+        attempts = 0;
+        let error = retry_probe(
+            || {
+                attempts += 1;
+                Err(ProbeError::Denied("path denied".into()))
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(error, "path denied");
+        assert_eq!(attempts, PROCESS_PROBE_ATTEMPTS);
+    }
+
+    #[test]
+    fn restart_survives_probe_failures_and_waits_for_a_stable_service() {
+        let watchdog = process(10, "watchdog");
+        let service = process(20, "service");
+        let replacement = process(21, "service");
+        let mut snapshots = VecDeque::from([
+            Err("path denied".into()),
+            Ok(vec![]),
+            Ok(vec![watchdog.clone(), service]),
+            Err("process changed".into()),
+            Ok(vec![watchdog.clone(), replacement.clone()]),
+            Ok(vec![watchdog, replacement]),
+        ]);
+        let mut launches = 0;
+        let mut waits = 0;
+        wait_for_restart(
+            Path::new("watchdog"),
+            Path::new("service"),
+            1,
+            || snapshots.pop_front().expect("restart should finish"),
+            || {
+                launches += 1;
+                Ok(())
+            },
+            || {
+                waits += 1;
+                waits < 8
+            },
+        )
+        .unwrap();
+        assert!(snapshots.is_empty());
+        assert_eq!(launches, 1);
+        assert_eq!(waits, 5);
+    }
+
+    #[test]
+    fn restart_never_launches_when_process_identity_cannot_be_verified() {
+        let mut waits = 0;
+        let error = wait_for_restart(
+            Path::new("watchdog"),
+            Path::new("service"),
+            1,
+            || Err("path denied".into()),
+            || panic!("unknown paths must not launch a duplicate watchdog"),
+            || {
+                waits += 1;
+                waits < 4
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("恢复超时") && error.contains("path denied"));
+        assert_eq!(waits, 4);
+    }
+
+    #[test]
+    fn restart_rejects_other_versions_and_sessions_and_does_not_spawn_repeatedly() {
+        let mut foreign_session = process(30, "service");
+        foreign_session.session = 2;
+        let other_version = process(31, "another-version/service");
+        let mut launches = 0;
+        let mut waits = 0;
+        let result = wait_for_restart(
+            Path::new("watchdog"),
+            Path::new("service"),
+            1,
+            || Ok(vec![foreign_session.clone(), other_version.clone()]),
+            || {
+                launches += 1;
+                Ok(())
+            },
+            || {
+                waits += 1;
+                waits < 4
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(launches, 1);
+        assert_eq!(waits, 4);
+    }
+
+    #[test]
+    fn a_failed_probe_or_changed_pid_breaks_the_stability_check() {
+        let watchdog = process(10, "watchdog");
+        let mut snapshots = VecDeque::from([
+            Ok(vec![watchdog.clone(), process(20, "service")]),
+            Ok(vec![watchdog.clone(), process(21, "service")]),
+            Err("process changed".into()),
+            Ok(vec![watchdog.clone(), process(21, "service")]),
+            Ok(vec![watchdog, process(21, "service")]),
+        ]);
+        wait_for_restart(
+            Path::new("watchdog"),
+            Path::new("service"),
+            1,
+            || snapshots.pop_front().expect("restart should finish"),
+            || panic!("watchdog already running"),
+            || true,
+        )
+        .unwrap();
+        assert!(snapshots.is_empty());
+    }
 }

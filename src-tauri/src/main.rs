@@ -673,6 +673,7 @@ async fn perform(
                 && (status.ime_compatible || !status.ime_installed)
             {
                 if status.theme_mode_pending {
+                    // Files are already original: retry settings only, no UAC.
                     theme_mode::finish(&skin::detect_for_status()?)?;
                     return Ok(current_status());
                 }
@@ -790,8 +791,10 @@ fn set_glass_opacity(opacity: u8) -> Result<AppStatus, String> {
 }
 
 #[tauri::command]
-fn list_system_fonts() -> FontLists {
-    list_installed()
+async fn list_system_fonts() -> Result<FontLists, String> {
+    tauri::async_runtime::spawn_blocking(list_installed)
+        .await
+        .map_err(|err| format!("读取字体列表失败：{err}"))
 }
 
 #[tauri::command]
@@ -803,6 +806,7 @@ fn get_user_logo() -> Option<Vec<u8>> {
 fn get_toolbar_preview(
     colors: Option<ThemeColors>,
     glass_opacity: Option<u8>,
+    theme_id: Option<String>,
 ) -> Result<ToolbarPreview, String> {
     let state = load_state();
     let src = official_status_wnd().ok_or_else(|| "未找到输入法工具栏资源".to_string())?;
@@ -811,14 +815,15 @@ fn get_toolbar_preview(
         None => colors_for(&state),
     };
     let opacity = clamp_glass_opacity(glass_opacity.unwrap_or(state.glass_opacity));
-    let glass = glass_enabled(opacity);
+    let theme_id = theme_id.as_deref().unwrap_or(&state.theme_id);
+    // Every palette fades only the face; borders and shadows retain their alpha.
     let custom = load_user_logo();
     generate_toolbar_preview(
         &src,
         &palette,
-        false,
-        GLASS_OPACITY_DEFAULT,
-        state.theme_id == "light" && !glass && palette == light_colors(),
+        glass_enabled(opacity),
+        opacity,
+        theme_id == "light",
         custom.as_deref(),
     )
 }

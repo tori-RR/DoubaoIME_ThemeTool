@@ -77,6 +77,26 @@ fn hex_rgb(hex: &str) -> Result<(u8, u8, u8), String> {
     ))
 }
 
+/// Select neutral black/white opposite the background's sRGB relative luminance.
+/// Compare the two contrast ratios instead of using an arbitrary RGB threshold.
+pub(crate) fn adaptive_border_color(hex: &str) -> Result<&'static str, String> {
+    let (r, g, b) = hex_rgb(hex)?;
+    let linear = |channel: u8| {
+        let value = f64::from(channel) / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let luminance = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+    Ok(if (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05) {
+        "black"
+    } else {
+        "white"
+    })
+}
+
 pub(crate) fn argb(hex: &str, alpha: u8) -> Result<String, String> {
     let (r, g, b) = hex_rgb(hex)?;
     Ok(format!("#{alpha:02X}{r:02X}{g:02X}{b:02X}"))
@@ -275,6 +295,32 @@ fn recolor_svg(src: &str, background: &str, fill_opacity: Option<&str>) -> Resul
     Ok(re.replace_all(src, repl).into_owned())
 }
 
+fn recolor_legacy_background(
+    src: &str,
+    background: &str,
+    fill_opacity: Option<&str>,
+    toolbar: bool,
+) -> Result<String, String> {
+    let out = recolor_svg(src, background, fill_opacity)?;
+    let (old, attribute, alpha) = if toolbar {
+        (r#"stroke="black" stroke-opacity="0.1""#, "stroke", "0.1")
+    } else {
+        (r#"fill="black" fill-opacity="0.08""#, "fill", "0.08")
+    };
+    match out.matches(old).count() {
+        0 => Ok(out), // Some legacy toolbar backgrounds have no separate border.
+        1 => Ok(out.replacen(
+            old,
+            &format!(
+                r#"{attribute}="{}" {attribute}-opacity="{alpha}""#,
+                adaptive_border_color(background)?
+            ),
+            1,
+        )),
+        _ => Err("旧版背景描边结构不匹配".into()),
+    }
+}
+
 pub(crate) const STATUS_WND_FILES: &[&str] = &[
     "status_bar_bg.svg",
     "status_divider.svg",
@@ -377,10 +423,11 @@ pub fn generate_toolbar_preview(
     colors: &ThemeColors,
     glass: bool,
     glass_opacity: u8,
-    keep_official: bool,
+    light: bool,
     logo: Option<&[u8]>,
 ) -> Result<ToolbarPreview, String> {
     let colors = colors.clone().normalize()?;
+    let light = light && colors == light_colors();
     let opacity = glass.then(|| glass_opacity_attr(glass_opacity));
     let fill_opacity = opacity.as_deref();
     let read = |name: &str| {
@@ -399,18 +446,23 @@ pub fn generate_toolbar_preview(
         .is_some_and(|n| n == "dark");
     let (bg, divider, mic, lang, punct, half) = if modern {
         (
-            crate::theme_modern::background(&bg_raw, "#262626", &colors.background, glass_opacity)?,
+            crate::theme_modern::toolbar_background(
+                &bg_raw,
+                &colors.background,
+                glass_opacity,
+                light,
+            )?,
             div_raw,
             crate::theme_modern::icon(&mic_raw, &colors)?,
             crate::theme_modern::icon(&lang_raw, &colors)?,
             crate::theme_modern::icon(&punct_raw, &colors)?,
             crate::theme_modern::icon(&half_raw, &colors)?,
         )
-    } else if keep_official {
+    } else if light && !glass {
         (bg_raw, div_raw, mic_raw, lang_raw, punct_raw, half_raw)
     } else {
         (
-            recolor_svg(&bg_raw, &colors.background, fill_opacity)?,
+            recolor_legacy_background(&bg_raw, &colors.background, fill_opacity, true)?,
             recolor_status_divider(&div_raw, &colors.foreground)?,
             recolor_status_icon(&mic_raw, &colors)?,
             recolor_status_icon(&lang_raw, &colors)?,
@@ -528,7 +580,7 @@ pub fn generate_patch(
     logo: Option<&[u8]>,
 ) -> Result<crate::transaction::Files, String> {
     if originals.contains_key("color/color_dark.xml") {
-        return crate::theme_modern::generate(originals, colors, fonts, opacity, logo);
+        return crate::theme_modern::generate(originals, colors, fonts, light, opacity, logo);
     }
     let colors = colors.clone().normalize()?;
     let fonts = fonts.clone().normalize()?;
@@ -544,7 +596,8 @@ pub fn generate_patch(
         for rel in CARD_SVGS {
             out.insert(
                 (*rel).into(),
-                recolor_svg(text(rel)?, &colors.background, alpha.as_deref())?.into_bytes(),
+                recolor_legacy_background(text(rel)?, &colors.background, alpha.as_deref(), false)?
+                    .into_bytes(),
             );
         }
         out.insert(
@@ -555,7 +608,9 @@ pub fn generate_patch(
             let rel = format!("status_wnd/{name}");
             let raw = text(&rel)?;
             let svg = match *name {
-                "status_bar_bg.svg" => recolor_svg(raw, &colors.background, alpha.as_deref())?,
+                "status_bar_bg.svg" => {
+                    recolor_legacy_background(raw, &colors.background, alpha.as_deref(), true)?
+                }
                 "status_divider.svg" => recolor_status_divider(raw, &colors.foreground)?,
                 _ => recolor_status_icon(raw, &colors)?,
             };
@@ -591,6 +646,56 @@ pub(crate) fn validate_xml(xml: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_border_changes_keep_alpha_geometry_and_shadow() {
+        let candidate = r##"<svg><rect fill="black" fill-opacity="0.08"/><rect fill="white"/><path fill="#000000"/><filter id="shadow"/></svg>"##;
+        let toolbar = r##"<svg><rect fill="white" stroke="black" stroke-opacity="0.1" stroke-width="1"/><filter id="shadow"/></svg>"##;
+        for (color, border) in [("#3D57D6", "white"), ("#FEE5CA", "black")] {
+            let expected_candidate = candidate
+                .replace(
+                    r#"fill="white""#,
+                    &format!(r#"fill="{color}" fill-opacity="0.70""#),
+                )
+                .replace(
+                    r#"fill="black" fill-opacity="0.08""#,
+                    &format!(r#"fill="{border}" fill-opacity="0.08""#),
+                );
+            assert_eq!(
+                recolor_legacy_background(candidate, color, Some("0.70"), false).unwrap(),
+                expected_candidate
+            );
+            let expected_toolbar = toolbar
+                .replace(
+                    r#"fill="white""#,
+                    &format!(r#"fill="{color}" fill-opacity="0.70""#),
+                )
+                .replace(r#"stroke="black""#, &format!(r#"stroke="{border}""#));
+            assert_eq!(
+                recolor_legacy_background(toolbar, color, Some("0.70"), true).unwrap(),
+                expected_toolbar
+            );
+        }
+    }
+
+    #[test]
+    fn neutral_border_uses_luminance_not_one_rgb_channel() {
+        for (background, expected) in [
+            ("#000000", "white"),
+            ("#FFFFFF", "black"),
+            ("#2A2A2A", "white"),
+            ("#3D57D6", "white"),
+            ("#FEE5CA", "black"),
+            ("#757575", "white"),
+            ("#767676", "black"),
+            ("#FF0000", "black"),
+            ("#00FF00", "black"),
+            ("#0000FF", "white"),
+        ] {
+            assert_eq!(adaptive_border_color(background).unwrap(), expected);
+        }
+        assert!(adaptive_border_color("#notrgb").is_err());
+    }
 
     #[test]
     fn font_rewrite_handles_reordered_attributes_and_rejects_duplicates() {

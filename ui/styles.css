@@ -501,7 +501,8 @@ h1 .mark {
   position: relative;
   width: 100%;
   min-width: 0;
-  overflow: hidden;
+  /* The bar clips its own contents; its shadow needs room. */
+  overflow: visible;
 }
 
 .bar {
@@ -516,7 +517,18 @@ h1 .mark {
   padding: 4.64px 36.56px 4.64px 4.64px;
   background: var(--preview-bg);
   border-radius: 9.96px;
-  box-shadow: 0 1.66px 13.28px rgba(0, 0, 0, 0.15), 0 0 0 0.41px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1.66px 13.28px rgba(0, 0, 0, 0.15);
+}
+
+.bar::after {
+  /* A full CSS pixel inside the face survives preview scaling and the shadow.
+     This preview-only stroke does not change installed SVG geometry or alpha. */
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--candidate-outline, rgba(0, 0, 0, 0.08));
+  border-radius: inherit;
+  pointer-events: none;
 }
 
 .chip {

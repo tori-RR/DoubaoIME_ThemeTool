@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 pub const IME_ROOT: &str = r"C:\Program Files\DoubaoIME";
 pub const IME_VERSION: &str = "v0.9.0.0";
 // Versions explicitly verified for this release, never an implicit <= range.
-pub const VERIFIED_IME_VERSIONS: &[&str] = &[IME_VERSION];
+pub const VERIFIED_IME_VERSIONS: &[&str] = &[IME_VERSION, "v0.9.2.7"];
 pub const BACKUP_DIR_NAME: &str = crate::transaction::BACKUP;
 
 pub fn official_hashes() -> Hashes {
@@ -387,6 +387,10 @@ mod structure_tests {
         );
         assert_eq!(store.live_hashes().unwrap(), before);
         assert!(!VERIFIED_IME_VERSIONS.contains(&"v9.9.9.9"));
+        assert!(VERIFIED_IME_VERSIONS.contains(&"v0.9.2.7"));
+        assert!(VERIFIED_IME_VERSIONS.contains(&"v0.9.0.0"));
+        assert!(!VERIFIED_IME_VERSIONS.contains(&"v0.9.2.6"));
+        assert!(!VERIFIED_IME_VERSIONS.contains(&"v0.9.2.8"));
     }
 
     #[test]
@@ -510,7 +514,10 @@ mod live_tests {
             "{}",
             status.warning
         );
-        assert!(!VERIFIED_IME_VERSIONS.contains(&target.version.as_str()));
+        assert!(VERIFIED_IME_VERSIONS.contains(&target.version.as_str()));
+        assert!(status
+            .verified_ime_versions
+            .contains(&"v0.9.2.7".to_owned()));
         println!(
             "Detected {}; structure={} compatible={}; official mode={:?} (read-only)",
             target.version,

@@ -168,7 +168,19 @@ function hexRgba(hex, alpha) {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
+function adaptiveBorderColor(hex) {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return "white";
+  const linear = (channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = 0.2126 * linear(rgb.r) + 0.7152 * linear(rgb.g) + 0.0722 * linear(rgb.b);
+  return (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05) ? "black" : "white";
+}
+
 function paintPreview(colors, fonts, themeId, opacity) {
+  const previewTheme = themeId || lastStatus?.theme_id || "dark";
   document.documentElement.style.setProperty("--preview-bg", colors.background);
   document.documentElement.style.setProperty("--preview-fg", colors.foreground);
   document.documentElement.style.setProperty("--emphasis", colors.emphasis || "#FFFFFF");
@@ -181,12 +193,16 @@ function paintPreview(colors, fonts, themeId, opacity) {
   const alpha = barPct / 100;
   document.documentElement.style.setProperty("--accent", hexRgba(colors.accent, alpha));
   previewBar.style.background = hexRgba(colors.background, alpha);
-  syncToolbarOpacity(barPct);
+  // Presets resolve to their official borders; drafts also track colour edits.
+  const border = adaptiveBorderColor(colors.background);
+  previewBar.style.setProperty("--candidate-outline",
+    border === "white" ? "rgba(255, 255, 255, 0.08)" : "rgba(0, 0, 0, 0.08)");
+  syncToolbarOpacity();
   if (lastStatus) {
     const next = {
       ...lastStatus,
       colors,
-      theme_id: themeId || lastStatus.theme_id,
+      theme_id: previewTheme,
       glass_opacity: barPct,
     };
     if (toolbarKey(next, barPct) !== toolbarCacheKey) {
@@ -441,6 +457,17 @@ function render(status, { keepPlugin, keepColors } = {}) {
   if (!keepPlugin) paintPlugin(status);
 }
 
+async function settleOperationStatus(name, status) {
+  if (name !== "install" && name !== "uninstall") return status;
+  // A final status read can coincide with the service replacing its startup
+  // process. Re-read only; never repeat an install or infer the active version.
+  for (let attempt = 0; attempt < 8 && status?.ime_installed && !status.ime_version; attempt++) {
+    await new Promise(resolve => window.setTimeout(resolve, 250));
+    status = await invoke("get_status").catch(() => status);
+  }
+  return status;
+}
+
 function call(name, payload) {
   if (inflight && name !== "get_status") return inflight;
   const uploading = ["import_logo", "import_taskbar_logo"].includes(name);
@@ -456,7 +483,7 @@ function call(name, payload) {
       setPluginHint("wait", uploading ? "处理图标…" : "等待授权");
     }
     try {
-      const status = await invoke(name, payload);
+      const status = await settleOperationStatus(name, await invoke(name, payload));
       const keepColors = ["delete_custom_theme", "install", "set_fonts", "set_glass_opacity", "import_logo", "clear_logo", "import_taskbar_logo", "clear_taskbar_logo"].includes(name);
       window.clearTimeout(flashTimer);
       render(status, { keepColors, keepPlugin: name === "uninstall" });
@@ -464,7 +491,7 @@ function call(name, payload) {
       return status;
     } catch (err) {
       // A failed commit may require recovery; never keep displaying stale success.
-      const actual = await invoke("get_status").catch(() => lastStatus);
+      const actual = await settleOperationStatus(name, await invoke("get_status").catch(() => lastStatus));
       if (actual) render(actual, { keepColors: true });
       showError(name === "uninstall" ? uninstallError(err) : String(err));
       return null;
@@ -598,15 +625,38 @@ function setThemeInput(id, { force = false } = {}) {
   input.value = themeName(id);
 }
 
-function setupCombo(input, menu, toggle, families, onCommit, { previewFace = false, fallback, itemAction } = {}) {
+function setupCombo(input, menu, toggle, families, onCommit, { previewFace = false, fallback, itemAction, loadFamilies } = {}) {
   let active = -1;
   let browsing = false;
+  let renderEpoch = 0;
+  let familiesLoaded = !loadFamilies;
+  let familiesRequest = null;
   const list = menu.querySelector(".combo-list") || menu;
   if (!list.id) list.id = `${input.id}-options`;
   input.setAttribute("role", "combobox");
   input.setAttribute("aria-controls", list.id);
   input.setAttribute("aria-autocomplete", "list");
-  const rows = () => [...list.children];
+  const rows = () => [...list.querySelectorAll('[role="option"]')];
+  // Loading every installed typeface forces expensive font resolution/layout.
+  // Only preview visible names, and resolve at most two typefaces per frame.
+  const fontQueue = new Set();
+  let fontFrame = 0;
+  const paintVisibleFonts = () => {
+    fontFrame = 0;
+    if (menu.hidden) { fontQueue.clear(); return; }
+    for (const name of [...fontQueue].slice(0, 2)) {
+      fontQueue.delete(name);
+      if (list.contains(name)) name.style.fontFamily = cssFace(name.textContent);
+    }
+    if (fontQueue.size) fontFrame = requestAnimationFrame(paintVisibleFonts);
+  };
+  const fontObserver = previewFace ? new IntersectionObserver((entries) => {
+    for (const { target, isIntersecting } of entries) {
+      if (isIntersecting && !target.style.fontFamily) fontQueue.add(target);
+      else fontQueue.delete(target);
+    }
+    if (fontQueue.size && !fontFrame) fontFrame = requestAnimationFrame(paintVisibleFonts);
+  }, { root: list, rootMargin: "32px" }) : null;
   const setExpanded = (open) => {
     input.setAttribute("aria-expanded", String(open));
     if (!open) input.removeAttribute("aria-activedescendant");
@@ -619,10 +669,15 @@ function setupCombo(input, menu, toggle, families, onCommit, { previewFace = fal
       el.hidden = true;
       const btn = el.closest(".combo")?.querySelector(".combo-toggle");
       if (btn) btn.setAttribute("aria-expanded", "false");
+      const field = el.closest(".combo")?.querySelector('[role="combobox"]');
+      if (field) { field.setAttribute("aria-expanded", "false"); field.removeAttribute("aria-activedescendant"); }
     });
   };
   const close = () => {
+    renderEpoch++;
     menu.hidden = true;
+    menu.setAttribute("aria-busy", "false");
+    fontQueue.clear();
     active = -1;
     browsing = false;
     setExpanded(false);
@@ -643,11 +698,16 @@ function setupCombo(input, menu, toggle, families, onCommit, { previewFace = fal
     close();
     onCommit(item);
   };
-  const render = (q) => {
+  const isCurrent = (epoch) => epoch === renderEpoch && !menu.hidden;
+  const renderItems = async (q, epoch) => {
     placeComboMenu(input, menu);
     const matched = matchedList(q);
+    fontObserver?.disconnect();
+    fontQueue.clear();
     list.innerHTML = "";
-    matched.forEach((item, index) => {
+    let fragment = document.createDocumentFragment();
+    for (let index = 0; index < matched.length; index++) {
+      const item = matched[index];
       const li = document.createElement("li");
       li.id = `${list.id}-${index}`;
       li.setAttribute("role", "option");
@@ -656,7 +716,7 @@ function setupCombo(input, menu, toggle, families, onCommit, { previewFace = fal
       const name = document.createElement("span");
       name.className = "combo-name";
       name.textContent = item.name;
-      if (previewFace) name.style.fontFamily = cssFace(item.name);
+      fontObserver?.observe(name);
       li.appendChild(name);
       const action = typeof itemAction === "function" ? itemAction(item) : null;
       if (action) {
@@ -682,8 +742,15 @@ function setupCombo(input, menu, toggle, families, onCommit, { previewFace = fal
         e.preventDefault();
         pick(item);
       });
-      list.appendChild(li);
-    });
+      fragment.appendChild(li);
+      if (previewFace && (index + 1) % 64 === 0) {
+        list.appendChild(fragment);
+        fragment = document.createDocumentFragment();
+        await new Promise(resolve => window.setTimeout(resolve, 0));
+        if (!isCurrent(epoch)) return;
+      }
+    }
+    list.appendChild(fragment);
     if (matched.length === 0) {
       const li = document.createElement("li");
       li.textContent = "无匹配";
@@ -691,11 +758,49 @@ function setupCombo(input, menu, toggle, families, onCommit, { previewFace = fal
       list.appendChild(li);
     }
     menu.hidden = false;
+    menu.setAttribute("aria-busy", "false");
     setExpanded(true);
     const current = input.value.trim();
     const idx = matched.findIndex((item) => item.name === current);
     active = idx >= 0 ? idx : matched.length ? 0 : -1;
     paintActive();
+  };
+  const render = (q) => {
+    const epoch = ++renderEpoch;
+    if (!previewFace) { renderItems(q, epoch); return; }
+    active = -1;
+    input.removeAttribute("aria-activedescendant");
+    fontObserver.disconnect();
+    fontQueue.clear();
+    const message = document.createElement("li");
+    message.className = "empty";
+    message.setAttribute("role", "status");
+    message.textContent = "正在加载字体…";
+    list.replaceChildren(message);
+    list.scrollTop = 0;
+    menu.hidden = false;
+    menu.setAttribute("aria-busy", "true");
+    setExpanded(true);
+    placeComboMenu(input, menu);
+    // Yield a paint before requesting native enumeration or creating rows.
+    requestAnimationFrame(() => window.setTimeout(async () => {
+      if (!isCurrent(epoch)) return;
+      try {
+        if (!familiesLoaded) {
+          familiesRequest ||= Promise.resolve().then(loadFamilies).then(items => {
+            families = items;
+            familiesLoaded = true;
+          }).finally(() => { familiesRequest = null; });
+          await familiesRequest;
+        }
+        if (isCurrent(epoch)) await renderItems(q, epoch);
+      } catch {
+        if (!isCurrent(epoch)) return;
+        message.textContent = "字体加载失败，重新展开重试";
+        list.replaceChildren(message);
+        menu.setAttribute("aria-busy", "false");
+      }
+    }, 0));
   };
   const openBrowse = () => {
     browsing = true;
@@ -880,16 +985,11 @@ function bindThemeCombo() {
 }
 
 function bindFontPickers(lists) {
-  const raw = lists.faces || [];
-  const faces = withCurrent(
-    raw.map((item) => (typeof item === "string" ? { name: item, keys: [] } : item)),
-    lastStatus ? lastStatus.fonts.face : "Microsoft YaHei"
-  );
   setupCombo(
     $("font-face"),
     $("font-face-menu"),
     $("font-face-toggle"),
-    faces,
+    [],
     (item) => {
       paintPreview(readPickers(), { face: item.name });
       if (!window.__TAURI__) return;
@@ -897,6 +997,13 @@ function bindFontPickers(lists) {
     },
     {
       previewFace: true,
+      loadFamilies: async () => {
+        const raw = (lists || await invoke("list_system_fonts")).faces || [];
+        return withCurrent(
+          raw.map((item) => (typeof item === "string" ? { name: item, keys: [] } : item)),
+          lastStatus ? lastStatus.fonts.face : "Microsoft YaHei"
+        );
+      },
       fallback: () => (lastStatus ? lastStatus.fonts.face : "Microsoft YaHei"),
     }
   );
@@ -914,14 +1021,15 @@ function toolbarKey(status, pct) {
     bg: colors && colors.background,
     fg: colors && colors.foreground,
     ac: colors && colors.accent,
-    keepOfficial: (status && status.theme_id) === "light" && !glassEnabled(pct),
+    theme: status && status.theme_id,
+    opacity: clampGlassOpacity(pct),
     logo: (status && status.logo_revision) || !!(status && status.has_custom_logo),
   });
 }
 
-function syncToolbarOpacity(pct) {
+function syncToolbarOpacity() {
   const bg = $("toolbar-bg");
-  if (bg) bg.style.opacity = String(clampGlassOpacity(pct) / 100);
+  if (bg) bg.style.opacity = "1";
 }
 
 function placeComboMenu(input, menu) {
@@ -1007,11 +1115,12 @@ function paintLogo(status) {
     invoke("get_toolbar_preview", {
       colors: status ? status.colors : readPickers(),
       glassOpacity: pct,
+      themeId: status ? status.theme_id : lastStatus?.theme_id,
     })
       .then((preview) => {
         if (seq !== logoSeq) return;
         showToolbar(preview, !!(status && status.has_custom_logo));
-        syncToolbarOpacity(pct);
+        syncToolbarOpacity();
       })
       .catch(() => {
         if (seq !== logoSeq) return;
@@ -1504,7 +1613,6 @@ if (!window.__TAURI__) {
   setPickers(DARK_COLORS);
   paintPreview(DARK_COLORS, { face: "Microsoft YaHei" });
 } else {
-  Promise.all([call("get_status"), invoke("list_system_fonts")])
-    .then(([, lists]) => bindFontPickers(lists))
-    .catch((err) => showError(String(err)));
+  bindFontPickers();
+  call("get_status");
 }
